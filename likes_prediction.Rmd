@@ -1,0 +1,389 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Predicting the "like" count for YouTube videos
+
+**Chaithra Bhat** [*cbhat\@umass.edu*](mailto:cbhat@umass.edu){.email}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## About the dataset
+
+*Dataset name:* YouTube Trending Video Dataset (updated daily)
+
+*Link:* <https://www.kaggle.com/rsrishav/youtube-trending-video-dataset>
+
+*Description:*The YouTube trending video statistics dataset is a
+day-wise record for up to 200 trending videos on YouTube across 12
+countries. For the purpose of this project though we will only be
+looking at videos from the USA and only for the year 2021. This dataset
+is a CSV file with each country having its own file. I obtained this
+dataset from Kaggle.
+
+## What do I plan to do?
+
+In this project I attempt to see if a linear model can be fitted to
+build a relationship between the number of views a video gets, the
+category (or genre) it belongs to and the number of likes it gets.
+
+I intend to use this relationship to predict the number of likes a video
+will get based on its category and number of views.
+
+I often hear a lot of creators say that their viewers should like, share
+their videos or subscribe to their channel and this got me interested in
+seeing if a relationship could be built to predict number of likes a
+video can get.
+
+## 1. Loading the required libraries
+
+We import the following libraries:
+
+1.  readr: For reading CSV files
+2.  dplyr: For data wrangling
+3.  ggplto2: For data visualization
+4.  lubridate: For splitting the date from a "YY/MM/DD" format into
+    separate columns for year, month and day.
+5.  moderndive: For linear regression methods
+6.  skimr: For the skim method
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(moderndive)
+library(skimr)
+```
+
+## 2. Reading from the CSV file into a dataframe
+
+The dataset has a CSV file for every region. Since for the purpose of
+this project we are only considering the US region we will be loading
+only that file.
+
+```{r}
+# read the CSV file containing data for day-wise trending videos in the US region
+all_US_video_data <- read_csv("US_youtube_trending_data.csv")
+
+# read the CSV file mapping category number to category (Example: categoryId 2 is "Autos & Vehicles", 17 is "Sports" and so on)
+category_mapping <- read_csv("category_mapping.csv")
+
+```
+
+## 2.1 Description of dataframes
+
+### The all_US_video_data dataframe
+
+The all_US_video_data dataframe contains day-wise trending data for all
+YouTube videos in the US region. It has numerous columns so I will
+describe only the columns that are within the scope of this project and
+ones that I'm considering.
+
+1.  categoryId: Numerical column indicating the category (or genre) of
+    the video
+2.  title: Title of the trending video
+3.  channelTitle: Name of the channel hosting the trending video
+4.  trending_date: Date the video was trending (in YYYY-MM-DD format)
+5.  view_count: Number of views the video received
+6.  likes: Number of likes the video received
+7.  dislikes: Number of dislikes the video received
+8.  comment_count: Number of comments the video received
+
+### The category_mapping dataframe
+
+This dataframe maps the category ID to the category name.
+
+```{r}
+# glimpse through the all_US_video_data dataframe
+glimpse(all_US_video_data)
+
+# glimpse through the category_mapping dataframe
+glimpse(category_mapping)
+
+```
+
+## 3. Data formatting
+
+While I was going through the dataset I noticed there were a few
+transformations that could be done to ensure that the subsequent results
+are more conveniently interpretable. So I perform the following
+transformations:
+
+1.  *Converting the video category from a numerical format to a textual
+    format:* Every CSV file had an accompanying JSON file which mapped
+    the number in the "categoryId" column to what the category actually
+    was in plain English. So category number 2 is for videos related to
+    autos & vehicles whereas 17 is for sports and so on. I add in a new
+    column to my dataframe containing the video category in plain
+    English text instead of a numerical value. I populate the values for
+    category by performing a left join between my video statistics
+    dataframe and my category mapping dataframe.
+
+2.  *Breaking up the date from one column into 3 distinct columns:* I
+    want to be able to better filter the date according to year, month
+    and day so I use the lubridate library methods to break it up into 3
+    columns. The "trending_date" column is broken up into "year",
+    "month" and "day" columns which are then renamed to "trending_year",
+    "trending_month" and "trending_day" respectively. Also, before I do
+    this I convert the date column into a R "date" datatype column.
+
+```{r}
+# left join dataframes to get a new column specifying what the cateogry is in English text
+us_video_data <- merge(x = all_US_video_data, y = category_mapping, by="categoryId", all.x = TRUE)
+
+# convert the date to an R date data type
+us_video_data$trending_date <- as.Date(us_video_data$trending_date, format = "%y.%m.%d")
+
+# split date into day, month and year
+us_video_data = us_video_data %>% 
+  mutate(date = ymd(trending_date)) %>% 
+  mutate_at(vars(trending_date), funs(year, month, day))
+
+# rename the year, month and day columns to something more meaningful
+us_video_data = us_video_data %>% 
+  rename(
+    trending_year = year,
+    trending_month = month,
+    trending_day = day
+  )
+
+# glance through the dataframe
+glimpse(us_video_data)
+```
+
+## 4. Data Wrangling
+
+Since I want to only consider videos from the year 2021, I make use of
+the filter function to select only videos with value of 2021 in the
+"trending_year" column.
+
+Then I summarise the data from a day-wise data format for all videos
+into a format grouped by genre. So I get a dataframe containing the
+day-wise aggregate data for each video genre as opposed to the dataframe
+we initialy started with which had data for every video on a day-to-day
+basis. I do this because I am more interested in the overall genres of
+the videos as opposed to specific videos, so aggregating them all in a
+day wise genre format makes it convenient for me.
+
+```{r}
+
+# select only essential data from the main data frame only for the year 2021 here I select only the trending year, month and day of the videos, its view count, the number of likes & dislikes, the number of comments, the category of the video, the channel name and the title of the video.
+
+us_video_selected_data <- us_video_data %>% 
+  filter(trending_year == "2021") %>%
+  select(trending_date, trending_year, trending_month, trending_day, view_count, likes, dislikes, comment_count, category, channelTitle, title)
+
+
+# Get mean views, mean number of likes, mean number of dislikes and mean comment count and group them by year, month, day and category (genre) into a new dataframe. I dont need the name of the video, just the category (or genre) alongwith metrics related to viewing are enough.
+
+us_video_summarised_data <- us_video_selected_data %>%
+  group_by(trending_year, trending_month, trending_day, category) %>%
+  summarise(mean_views = mean(view_count, na.rm = TRUE), mean_likes = mean(likes, na.rm = TRUE), mean_dislikes = mean(dislikes, na.rm = TRUE), mean_comment_count = mean(comment_count, na.rm = TRUE))
+
+# Let's divide the means by 1000 to allow for easier visualization
+us_video_summarised_data$mean_views = us_video_summarised_data$mean_views / 1000
+us_video_summarised_data$mean_likes = us_video_summarised_data$mean_likes / 1000
+us_video_summarised_data$mean_dislikes = us_video_summarised_data$mean_dislikes / 1000
+
+us_video_summarised_data$mean_comment_count = us_video_summarised_data$mean_comment_count / 1000
+
+
+video_month_summary <- us_video_selected_data %>%
+  group_by(trending_year, trending_month, category) %>%
+  summarise(mean_views = mean(view_count), mean_likes = mean(likes), mean_dislikes = mean(dislikes), mean_comment_count = mean(comment_count))
+```
+
+## 5. Data visualization
+
+Here, I visualize the following distributions:
+
+1.  First, I generate a boxplot for the views received by each genre
+    over the year of 2021. Since the boxplot is too cluttered I generate
+    another boxplot for only a few select genres which are the ones that
+    I want to consider for the purpose of this project (the ones with
+    the highest median views).
+
+2.  Now for those selected genres I generate a boxplot for number of
+    likes such videos have received over one year (2021).
+
+3.  Then I generate a scatterplot of views v/s likes for those select
+    genres
+
+4.  I also generate a scatterplot of views v/s comments for those select
+    genres
+
+### Purpose of boxplots:
+
+The boxplot gives me an idea of the median number of views videos in
+each genre will receive and the variability in the number of viewers
+across days and months for each genres. The genres with higher median
+values and smaller boxes indicate that they are popular and have
+maintained consistency in the number of views received by videos falling
+within that genre (Example: Gaming sees a higher value of median views
+and also less variability in the number of views as inidcated by its
+lesser Inter-Quartile range). I don't want to consider all genres for my
+eventual regression equation, I just want to pick the fairly popular
+ones so I use the result from this boxplot to narrow down the genres I
+want to pick. The ones I decide on picking are: Music, Film & Animation,
+Science and Technology, Gaming
+
+```{r}
+# Generate a boxplot for views each genre has received over one year (2021)
+# We see in this boxplot that music, film & animation, science & technology and gaming have a high median value meaning 50% of videos that belong to each of these categories get a much higher number of views as compared to 50% of videos belonging to each of the other categories. We also see in the boxplot how high the spread is for videos related to Nonprofits and activism.
+ggplot(data = us_video_summarised_data, mapping = aes(x = category, y = mean_views)) + geom_boxplot(color = "blue") + coord_flip() + ggtitle("Views each genre has recieved over one year (2021)") + xlab("Genre") + ylab("Number of daily mean views (value divided by 1000)")
+
+# create a new dataframe with only my genres of interest which are music, film & animation, science & technology and gaming since these genres have a higher number of median views
+us_video_specific_data <- us_video_summarised_data %>%
+  filter(category == "Music" | category == "Film & Animation" | category == "Science & Technology" | category == "Gaming")
+
+# generate a boxplot with my newer dataframe
+ggplot(data = us_video_specific_data, mapping = aes(x = category, y = mean_views)) + geom_boxplot(color = "blue") + coord_flip() + ggtitle("Views selected genres have recieved over one year (2021)") + xlab("Genre") + ylab("Number of daily mean views (values divided by 1000)")
+
+# now let's generate a boxplot for the number of likes received by each genre of videos
+# We see in this boxplot that music videos receive a much higher number of likes however their spread is way high too. Science and Technology videos on the other hand have 50% of their videos receiving a lesser number of likes but the spread is slightly larger there too indicating that there are a few videos which end up getting  higher number of likes
+ggplot(data = us_video_specific_data, mapping = aes(x = category, y = mean_likes)) + geom_boxplot(color = "blue") + coord_flip() + ggtitle("Likes selected genres have recieved over one year (2021)") + xlab("Genre") + ylab("Number of daily mean likes (values divided by 1000)")
+
+# now let's generate a boxplot for the number of comments received by each genre of videos
+# This boxplot contains a lot of outliers and once again music videos get a larger number of comments. However, we see that the other categories generally have 75% of their videos receiving a similar number of comments (the difference isn't very large especially in median value of science and gaming videos)
+ggplot(data = us_video_specific_data, mapping = aes(x = category, y = mean_comment_count)) + geom_boxplot(color = "blue") + coord_flip() + ggtitle("Comments selected genres have recieved over one year (2021)") + xlab("Genre") + ylab("Mean value of daily comment count (values divided by 1000)")
+
+# now let's generate a scatterplot of views vs likes for gaming, music, science & technology and film & animation videos
+# We see in the scatterplot that most points are populated densely in the y=x pattern which signifies that generally as the number of views grow the number of likes also gorws for videos in these categories
+ggplot(data = us_video_specific_data, mapping = aes(x = mean_views, y = mean_likes, col = category)) + geom_point(alpha = 0.2) + coord_flip() + facet_wrap(~ category) + ggtitle("Number of likes v/s views selected genres have recieved over one year (2021)") + xlab("Number of daily mean views (values divided by 1000)") + ylab("Mean number of likes recieved daily (values divided by 1000)")
+
+# now let's generate a scatterplot of views vs comments for Comedy, Music and Drama
+# We see in this scatterplot that unlike the views vs likes relation, the comments vs views relation isn't really growing in the y=x pattern, the music category comes close to it but I am not convinced.
+ggplot(data = us_video_specific_data, mapping = aes(x = mean_views, y = mean_comment_count, col = category)) + geom_point(alpha = 0.2) + coord_flip() + facet_wrap(~category) + ggtitle("Number of comments v/s views selected genres have recieved over one year (2021)") + xlab("Number of daily mean views (values divided by 1000)") + ylab("Mean number of comments received daily (values divided by 1000)")
+
+```
+
+## 6. Fitting a linear model
+
+Now I want to build a relationship between the number of views a video
+gets and the number of likes it receives.
+
+Why did I choose a relationship between views-likes and not between
+views-comments? This is because I see a stronger correlation between
+number of views and number of likes (0.787 as seen in the code and
+subsequent output below) as opposed to a correlation score of 0.620
+between number of views and number of comments. Also the graphs above
+specifically the scatterplot of views v/s likes add support.
+
+```{r}
+# Now before we begin work on our regression model let's set our views, likes and comment count back to their original value (we had divided them by 1000 earlier for better visualization), the like and the view count is all that matters to us but just to be uniform I'll set dislikes and comment_count back to their original values too
+us_video_specific_data$mean_views = us_video_specific_data$mean_views * 1000
+us_video_specific_data$mean_likes = us_video_specific_data$mean_likes * 1000
+us_video_specific_data$mean_dislikes = us_video_specific_data$mean_dislikes * 1000
+
+us_video_specific_data$mean_comment_count = us_video_specific_data$mean_comment_count * 1000
+
+# Now let's see the correlation between views, likes and comments
+# We observe a much higher correlation between number of views and number of likes
+us_video_specific_data %>% ungroup() %>% select(mean_views, mean_likes, mean_comment_count) %>% cor()
+
+# Let's make number of likes our outcome variable whereas let number of views and genre of the video be our explanatory variables.
+
+# Now let's quantify the relationship between our outcome and explanatory variables using an interaction model
+ggplot(us_video_specific_data, aes(x = mean_views, y = mean_likes, col = category)) +
+  geom_point(alpha = 0.05) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(y = "Likes", 
+       x = "Views", 
+       title = "Interaction model")
+
+# For comparison let us also see the output of a parallel slopes model
+ggplot(us_video_specific_data,
+       aes(x = mean_views, y = mean_likes, col = category)) +
+  geom_point(alpha = 0.05) +
+  geom_parallel_slopes(se = FALSE) +
+  labs(y = "Likes",
+       x = "Views",
+       title = "Parallel slopes model")
+
+# Both the interaction and parallel slopes model give distinct results, the interaction model seems to fit well and therefore I will choose that as my multiple regression model.
+
+# Let's fit the regression model with mean_likes as the outcome variable and mean_views and category as explanatory variables 
+property_model <- lm(mean_likes ~ mean_views * category, 
+                     data = us_video_specific_data)
+
+# Let's get our regression table
+get_regression_table(property_model)
+
+# The values are too large for all columns to be displayed completely in the final HTML report so I select only the first column since that is what I use to build my equation.
+get_regression_table(property_model) %>%
+  select(term, estimate)
+```
+
+Using the above points we construct our regression equation.
+
+likes = b_0 + b_views.views + b_gaming.(is_gaming) +
+b_views,gaming.views.(is_gaming) + b_music.(is_music) + b_views,
+music.views.(is_music) + b_scitech.(is_scitech) + b_views,
+scitech.views.(is_scitech)
+
+where
+
+1.  b_0 -\> Intercept = 42979.312 for animation videos
+2.  b_views -\> Slope for views = 0.021 for animation videos
+3.  b_gaming -\> Offset in intercept = -12641.731 for gaming videos
+4.  is_gaming -\> Indicator function which will be 1 if video is a
+    gaming video else 0
+5.  b_views, gaming -\> Offset in slope = 0.020 for gaming videos
+6.  b_music -\> Offset in intercept = -33455.786 for music videos
+7.  is_music -\> Indicator function which will be 1 if video is a music
+    video else 0
+8.  b_views, music -\> Offset in slope = 0.044 for music videos
+9.  b_scitech -\> Offset in intercept = 12613.456 for science &
+    technology videos
+10. is_scitech -\> Indicator function which will be 1 if video is a
+    science & technology video else 0
+11. b_views, scitech -\> Offset in slope = 0.005 for science &
+    technology videos
+
+Therefore, our equation with the values substituted becomes:
+
+likes = 42979.312 + 0.021.views - 12641.731.(is_gaming) +
+0.020.views.(is_gaming) - 33455.786.(is_music) +
+0.044.views.(is_music) + 12613.456.(is_scitech) +
+0.005.views.(is_scitech)
+
+Therefore, if I make a music video and I get 500,000 views on it then
+the number of likes my model predicts I'll get are (is_gaming and
+is_scitech will be 0): likes = 42979.312 + (0.021 \* 500000) -
+33455.786 + (0.044 \* 500000) likes = 42979.312 + 10500 - 33455.786 +
+22000 likes = 42023.526 Therefore, approx. 42,204 likes
+
+```{r}
+# We can also get fitted values and residuals for all our data points through the get_regression_points method, let's see them
+
+get_regression_points(property_model)
+```
+
+## 7. Conclusion
+
+Honestly, most of the residuals I see in the table above are quite high
+which means our model isn't the best fit, I feel perhaps having more
+data could be one step towards bettering this and also by trying to have
+more explanatory variables. However, we were able to fit a line and
+build a relationship between views and likes for certain genres of
+videos and I feel that I have met the goal that I set out with when I
+started this project. I was looking more to learn and understand rather
+than arrive at a highly accurate or precise prediction.
+
+When I first decided that I wanted to build a relationship between views
+and likes it seemed a little obvious to me that videos with higher views
+will get higher likes but that is not always true for all categories of
+videos as we have seen in our visualization, this reminded me of a quote
+that I read somewhere once, it went like this:
+
+*In god we trust, everyone else must bring data.*
+
+###### END OF REPORT
